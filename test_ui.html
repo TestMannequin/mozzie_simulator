@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mosquito Swarm Simulator</title>
+
+  <!-- PyScript CSS & Core -->
+  <link rel="stylesheet" href="https://pyscript.net/releases/2024.1.1/core.css" />
+  <script type="module" src="https://pyscript.net/releases/2024.1.1/core.js"></script>
+
+  <!-- Three.js CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
+    #ui { position: absolute; top: 10px; left: 10px; background: rgba(255,255,255,0.9); padding: 10px; border-radius: 4px; font-family: sans-serif; z-index: 10; }
+    #ui div { margin-bottom: 5px; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+  <!-- Loading dialog -->
+  <dialog id="loading"><h2>Loading…</h2></dialog>
+  <script type="module">
+    const ld = document.getElementById('loading');
+    ld.showModal();
+    addEventListener('py:ready', () => ld.close());
+  </script>
+
+  <!-- UI Controls -->
+  <div id="ui">
+    <div><label>N:      <input type="range" id="nSlider" min="1000" max="50000" value="10000" step="1000" /></label></div>
+    <div><label>&sigma;: <input type="range" id="sigmaSlider" min="0" max="5" value="0.5" step="0.1" /></label></div>
+    <div><label>Attract: <input type="range" id="atrSlider" min="0" max="1" value="0.1" step="0.01" /></label></div>
+    <div><label>Rep Rad: <input type="range" id="rradSlider" min="0" max="5" value="1" step="0.1" /></label></div>
+    <div><label>Rep Str: <input type="range" id="rstrSlider" min="0" max="1" value="0.05" step="0.01" /></label></div>
+  </div>
+
+  <!-- Rendering Canvas -->
+  <canvas id="c"></canvas>
+
+  <py-script>
+    from pyodide import loadPackage
+    await loadPackage("numpy")
+  </py-script>
+
+  <!-- Load simulation core -->
+  <py-script src="swarm.py"></py-script>
+
+  <!-- Simulation control and expose step -->
+  <py-script>
+import numpy as np
+from js import document, console, window
+from swarm import MosquitoSwarm
+
+# Simulation bounds and state
+bounds = np.array([[-50, -50, -50], [50, 50, 50]])
+swarm = None
+
+def update_swarm(evt=None):
+    global swarm
+    N     = int(document.getElementById('nSlider').value)
+    sigma = float(document.getElementById('sigmaSlider').value)
+    atr   = float(document.getElementById('atrSlider').value)
+    rrad  = float(document.getElementById('rradSlider').value)
+    rstr  = float(document.getElementById('rstrSlider').value)
+    swarm = MosquitoSwarm(N, bounds, sigma, np.zeros(3), atr, rrad, rstr)
+    console.log(f"Swarm reset: N={N}, σ={sigma}, atr={atr}, rrad={rrad}, rstr={rstr}")
+
+# Attach UI listeners
+for sid in ['nSlider','sigmaSlider','atrSlider','rradSlider','rstrSlider']:
+    document.getElementById(sid).addEventListener('input', update_swarm)
+# Initialize
+update_swarm()
+
+def step(dt: float):
+    swarm.step(dt)
+    return swarm.state().tolist()
+
+# Expose to JS
+window.step = step
+  </py-script>
+
+  <!-- Three.js rendering loop -->
+  <script type="module">
+    addEventListener('py:ready', async () => {
+      await pyodide.loadPackage("numpy");
+      const canvas   = document.getElementById('c');
+      const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+
+      const scene    = new THREE.Scene();
+      scene.background = new THREE.Color(0xffffff);
+
+      const camera   = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+      camera.position.z = 150;
+
+      let mesh = null;
+      const dummy = new THREE.Object3D();
+      let prevCount = 0;
+
+      function updateMesh(count) {
+        if (mesh) {
+          scene.remove(mesh);
+          mesh.geometry.dispose();
+          mesh.material.dispose();
+        }
+        const geom = new THREE.SphereGeometry(0.5, 8, 8);
+        const mat  = new THREE.MeshBasicMaterial({ color: 0x333333 });
+        mesh = new THREE.InstancedMesh(geom, mat, count);
+        mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+        scene.add(mesh);
+        prevCount = count;
+      }
+
+      window.addEventListener('resize', () => {
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        camera.aspect = window.innerWidth/window.innerHeight;
+        camera.updateProjectionMatrix();
+      });
+
+      async function animate() {
+        const dt = 0.016;
+        const arrList = await window.step(dt);
+        const arr     = new Float32Array(arrList);
+        const count   = arr.length / 3;
+        if (count !== prevCount) updateMesh(count);
+        for (let i = 0; i < count; i++) {
+          dummy.position.set(arr[3*i], arr[3*i+1], arr[3*i+2]);
+          dummy.updateMatrix();
+          mesh.setMatrixAt(i, dummy.matrix);
+        }
+        mesh.instanceMatrix.needsUpdate = true;
+        renderer.render(scene, camera);
+        requestAnimationFrame(animate);
+      }
+
+      animate();
+    });
+  </script>
+</body>
+</html>
